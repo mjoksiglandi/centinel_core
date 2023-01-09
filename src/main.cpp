@@ -32,10 +32,18 @@ rcl_timer_t timer;
 
 #define LED_PIN 2
 
-float x;
-float z;
-const int m1 = 4;
-const int m2 = 17;
+struct Datos{
+  float x;
+  float z;
+}
+Datos dato;
+
+struct Motor{
+  const int Left =4;
+  const int Right =17;
+}
+Motor motor;
+
 const int L1 = 16;
 
 void error_loop(){
@@ -49,8 +57,8 @@ void error_loop(){
 void subscription_callback(const void *msgin) {
   const geometry_msgs__msg__Twist * msg = (const geometry_msgs__msg__Twist *)msgin;
   // if velocity in x direction is 0 turn off LED, if 1 turn on LED
-  x = constrain(msg->linear.x, -1, 1);
-  z= constrain(msg->angular.z, -1, 1);
+  dato.x = constrain(msg->linear.x, -1, 1);
+  dato.z= constrain(msg->angular.z, -1, 1);
   //digitalWrite(LED_PIN, (msg->linear.x == 0) ? LOW : HIGH);
   //x = dir;
 }
@@ -69,8 +77,8 @@ void setup() {
   set_microros_transports();
   pinMode(L1, OUTPUT);
   pinMode(LED_PIN, OUTPUT);
-  Motor1.attach(m1, 1000, 2000);
-  Motor2.attach(m2, 1000, 2000);
+  Motor1.attach(Moto.Left, 1000, 2000);
+  Motor2.attach(Motor.Right, 1000, 2000);
   delay(2000);
 
   allocator = rcl_get_default_allocator();
