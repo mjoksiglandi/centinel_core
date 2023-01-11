@@ -32,17 +32,20 @@ rcl_timer_t timer;
 
 #define LED_PIN 2
 
+#define PWM_MIN 1250
+#define PWM_MAX 1750
+
 struct Datos{
   float x;
   float z;
-}
-Datos dato;
+}Datos;
+
 
 struct Motor{
   const int Left =4;
   const int Right =17;
-}
-Motor motor;
+}Motor;
+
 
 const int L1 = 16;
 
@@ -57,8 +60,8 @@ void error_loop(){
 void subscription_callback(const void *msgin) {
   const geometry_msgs__msg__Twist * msg = (const geometry_msgs__msg__Twist *)msgin;
   // if velocity in x direction is 0 turn off LED, if 1 turn on LED
-  dato.x = constrain(msg->linear.x, -1, 1);
-  dato.z= constrain(msg->angular.z, -1, 1);
+  Datos.x = constrain(msg->linear.x, -1, 1);
+  Datos.z= constrain(msg->angular.z, -1, 1);
   //digitalWrite(LED_PIN, (msg->linear.x == 0) ? LOW : HIGH);
   //x = dir;
 }
@@ -68,7 +71,7 @@ void timer_callback(rcl_timer_t * timer, int64_t last_call_time)
   RCLC_UNUSED(last_call_time);
   if (timer != NULL) {
     RCSOFTCHECK(rcl_publish(&publisher, &msg_th, NULL));
-    msg_th.data=(float)x;
+    msg_th.data=(float)Datos.x;
   }
 }
 
@@ -77,8 +80,8 @@ void setup() {
   set_microros_transports();
   pinMode(L1, OUTPUT);
   pinMode(LED_PIN, OUTPUT);
-  Motor1.attach(Moto.Left, 1000, 2000);
-  Motor2.attach(Motor.Right, 1000, 2000);
+  Motor1.attach(Motor.Left, PWM_MIN, PWM_MAX);
+  Motor2.attach(Motor.Right, PWM_MIN, PWM_MAX);
   delay(2000);
 
   allocator = rcl_get_default_allocator();
@@ -127,39 +130,42 @@ void loop() {
   RCCHECK(rclc_executor_spin_some(&executor_sub, RCL_MS_TO_NS(100)));
   RCCHECK(rclc_executor_spin_some(&executor_pub, RCL_MS_TO_NS(100)));
 
-  if (x==0 || z==0){
+
+  if (Datos.x==0 && Datos.z==0){
     Motor1.write(90);
     Motor2.write(90);
   } 
-  else if (x<0){
+  else if (Datos.x<0 && Datos.z==0){
     Motor1.write(0);
     Motor2.write(0);
   }
-  else if (x>0){
+  else if (Datos.x>0 && Datos.z==0 ){
     Motor1.write(180);
     Motor2.write(180);    
   }
-  if (z<0){
+  else if (Datos.z<0 && Dato.x == 0){
     Motor1.write(0);
     Motor2.write(180);
   }
-  else if (z>0){
+  else if (Datos.z>0 && Dato.x == 0){
     Motor1.write(180);
     Motor2.write(0);    
   }
-  if (msg_th.data == 0){
-    digitalWrite(L1, LOW);
-    digitalWrite(LED_PIN, LOW);
+  else if (Dato.x < 0 && Dato.z <0){
+    Motor1.write(135);
+    Motor2.write(180);
   }
-  else if (msg_th.data == 1){
-    digitalWrite(L1, LOW);
-    digitalWrite(LED_PIN, HIGH);
+  else if (Dato.x < 0 && Dato.z >0){
+    Motor1.write(180);
+    Motor2.write(135);
   }
-  else if (msg_th.data == -1){
-    digitalWrite(L1, HIGH); 
-    digitalWrite(LED_PIN, LOW);
+    else if (Dato.x > 0 && Dato.z <0){
+    Motor1.write(45);
+    Motor2.write(0);
   }
-
-
+  else if (Dato.x > 0 && Dato.z >0){
+    Motor1.write(0);
+    Motor2.write(45);
+  }
 
 }
