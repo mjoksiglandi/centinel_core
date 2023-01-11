@@ -1,18 +1,19 @@
 #include <micro_ros_arduino.h>
-
 #include <stdio.h>
 #include <rcl/rcl.h>
 #include <rcl/error_handling.h>
 #include <rclc/rclc.h>
 #include <rclc/executor.h>
-
 #include <geometry_msgs/msg/twist.h>
 #include <std_msgs/msg/int32.h>
-
 #include <ESP32Servo.h>
 
-Servo Motor1;
-Servo Motor2;
+#define RCCHECK(fn) { rcl_ret_t temp_rc = fn; if((temp_rc != RCL_RET_OK)){error_loop();}}
+#define RCSOFTCHECK(fn) { rcl_ret_t temp_rc = fn; if((temp_rc != RCL_RET_OK)){error_loop();}}
+
+#define LED_PIN 2
+#define PWM_MIN 1250
+#define PWM_MAX 1750
 
 rcl_allocator_t allocator;
 rclc_support_t support;
@@ -27,25 +28,18 @@ std_msgs__msg__Int32 msg_th;
 rclc_executor_t executor_pub;
 rcl_timer_t timer;
 
-#define RCCHECK(fn) { rcl_ret_t temp_rc = fn; if((temp_rc != RCL_RET_OK)){error_loop();}}
-#define RCSOFTCHECK(fn) { rcl_ret_t temp_rc = fn; if((temp_rc != RCL_RET_OK)){error_loop();}}
-
-#define LED_PIN 2
-
-#define PWM_MIN 1250
-#define PWM_MAX 1750
+Servo Motor1;
+Servo Motor2;
 
 struct Datos{
   float x;
   float z;
 }Datos;
 
-
 struct Motor{
   const int Left =4;
   const int Right =17;
 }Motor;
-
 
 const int L1 = 16;
 
@@ -59,11 +53,8 @@ void error_loop(){
 //twist message cb
 void subscription_callback(const void *msgin) {
   const geometry_msgs__msg__Twist * msg = (const geometry_msgs__msg__Twist *)msgin;
-  // if velocity in x direction is 0 turn off LED, if 1 turn on LED
   Datos.x = constrain(msg->linear.x, -1, 1);
   Datos.z= constrain(msg->angular.z, -1, 1);
-  //digitalWrite(LED_PIN, (msg->linear.x == 0) ? LOW : HIGH);
-  //x = dir;
 }
 
 void timer_callback(rcl_timer_t * timer, int64_t last_call_time)
@@ -74,7 +65,6 @@ void timer_callback(rcl_timer_t * timer, int64_t last_call_time)
     msg_th.data=(float)Datos.x;
   }
 }
-
 
 void setup() {
   set_microros_transports();
@@ -113,7 +103,6 @@ void setup() {
     RCL_MS_TO_NS(timer_timeout),
     timer_callback));
 
-
   // create executor subscriber
   RCCHECK(rclc_executor_init(&executor_sub, &support.context, 1, &allocator));
   RCCHECK(rclc_executor_add_subscription(&executor_sub, &subscriber, &msg, &subscription_callback, ON_NEW_DATA));
@@ -122,14 +111,11 @@ void setup() {
   RCCHECK(rclc_executor_init(&executor_pub, &support.context, 1, &allocator));
   RCCHECK(rclc_executor_add_timer(&executor_pub, &timer));
 
-  //msg_th.data = 0;
-
 }
 void loop() {
   delay(100);
   RCCHECK(rclc_executor_spin_some(&executor_sub, RCL_MS_TO_NS(100)));
   RCCHECK(rclc_executor_spin_some(&executor_pub, RCL_MS_TO_NS(100)));
-
 
   if (Datos.x==0 && Datos.z==0){
     Motor1.write(90);
@@ -143,29 +129,29 @@ void loop() {
     Motor1.write(180);
     Motor2.write(180);    
   }
-  else if (Datos.z<0 && Dato.x == 0){
+  else if (Datos.z<0 && Datos.x == 0){
     Motor1.write(0);
     Motor2.write(180);
   }
-  else if (Datos.z>0 && Dato.x == 0){
+  else if (Datos.z>0 && Datos.x == 0){
     Motor1.write(180);
     Motor2.write(0);    
   }
-  else if (Dato.x < 0 && Dato.z <0){
+  else if (Datos.x < 0 && Datos.z <0){
     Motor1.write(135);
     Motor2.write(180);
   }
-  else if (Dato.x < 0 && Dato.z >0){
+  else if (Datos.x < 0 && Datos.z >0){
     Motor1.write(180);
     Motor2.write(135);
   }
-    else if (Dato.x > 0 && Dato.z <0){
+    else if (Datos.x > 0 && Datos.z <0){
     Motor1.write(45);
     Motor2.write(0);
   }
-  else if (Dato.x > 0 && Dato.z >0){
+  else if (Datos.x > 0 && Datos.z >0){
     Motor1.write(0);
     Motor2.write(45);
   }
 
-}
+}//end Loop
