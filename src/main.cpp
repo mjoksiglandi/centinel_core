@@ -260,8 +260,10 @@ void setup() {
   Motor.M2.attach(Motor.Right, PWM_MIN, PWM_MAX);
   Motor.sLin.attach(Motor.Lineal, 1000, 2000);
   Motor.sRad.attach(Motor.Radial, 1000, 2000);
-  pinMode(encoder.enc1A, INPUT);
-  pinMode(encoder.enc1B, INPUT);
+  pinMode(encoder.enc1A, INPUT_PULLUP);
+  pinMode(encoder.enc1B, INPUT_PULLUP);
+  pinMode(encoder.enc2A, INPUT_PULLUP);
+  pinMode(encoder.enc2B, INPUT_PULLUP);
   attachInterrupt(digitalPinToInterrupt(encoder.enc1A), encodeA1, CHANGE);
   attachInterrupt(digitalPinToInterrupt(encoder.enc1B), encodeB1, CHANGE);
   attachInterrupt(digitalPinToInterrupt(encoder.enc2A), encodeA2, CHANGE);
