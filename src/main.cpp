@@ -19,21 +19,24 @@
 
 #include <Adafruit_MPU6050.h>
 #include <Adafruit_Sensor.h>
-#include <Kalman.h>
 #include <Wire.h>
 
 #include <ESP32Servo.h>
 #define LED_PIN 2
 #define PWM_MIN 1250
 #define PWM_MAX 1750
+#define WHEEL_DIAM 0.12
+#define PPR 537
 
+float x_pos_ = (0.0);
+float y_pos_ = (0.0);
+float heading_ = (0.0);
 
-Kalman kalmanX;  // Create the Kalman instances
-Kalman kalmanY;
-Kalman kalmanz;
-
-double kalAngleX, kalAngleY;  // Calculated angle using a Kalman filter
 uint32_t timer2;
+unsigned long prev_odom_update = 0;
+unsigned long prev_update_time;
+long prev_pulsosx;
+long prev_pulsosy;
 
 
 #define RCCHECK(fn) \
@@ -119,6 +122,18 @@ int count = 0;
 int countA;
 unsigned long long time_offset = 0;
 Adafruit_MPU6050 IMU;
+float wS = 0.29;
+float wD = 0.12;
+int ppr = 537;
+
+float velx;
+float vely;
+
+float rpmx;
+float rpmy;
+float Linear_x;
+float Angular_z;
+
 
 bool micro_ros_init_successful;
 
@@ -141,18 +156,18 @@ enum states {
 } state;
 
 
-const void euler_to_quat(float x, float y, float z, double *q) {
-  float c1 = cos((y * 3.14 / 180.0) / 2);
-  float c2 = cos((z * 3.14 / 180.0) / 2);
-  float c3 = cos((x * 3.14 / 180.0) / 2);
+const void euler_to_quat(float roll, float pitch, float yaw, float *q) {
+  float cy = cos(yaw * 0.5);
+  float sy = sin(yaw * 0.5);
+  float cp = cos(pitch * 0.5);
+  float sp = sin(pitch * 0.5);
+  float cr = cos(roll * 0.5);
+  float sr = sin(roll * 0.5);
 
-  float s1 = sin((y * 3.14 / 180.0) / 2);
-  float s2 = sin((z * 3.14 / 180.0) / 2);
-  float s3 = sin((x * 3.14 / 180.0) / 2);
-
-  q[0] = c1 * c2 * c3 - s1 * s2 * s3;
-  q[1] = s1 * s2 * c3 + c1 * c2 * s3;
-  q[2] = s1 * c2 * c3 + c1 * s2 * s3;
+  q[0] = cy * cp * cr + sy * sp * sr;
+  q[1] = cy * cp * sr - sy * sp * cr;
+  q[2] = sy * cp * sr + cy * sp * cr;
+  q[3] = sy * cp * cr - cy * sp * sr;
 }
 
 bool create_entities() {
@@ -164,38 +179,37 @@ bool create_entities() {
   // create node
   RCCHECK(rclc_node_init_default(&node, "microRos_Node", "", &support));
 
-
+  //dato bruto
   RCCHECK(rclc_publisher_init_default(
     &pubenco,
     &node,
     ROSIDL_GET_MSG_TYPE_SUPPORT(std_msgs, msg, Int32),
-    "/wheel"));
-
+    "wheel"));
+  //tf
   RCCHECK(rclc_publisher_init_default(
     &pubtf,
     &node,
     ROSIDL_GET_MSG_TYPE_SUPPORT(tf2_msgs, msg, TFMessage),
-    "/tf"));
-
-
+    "tf"));
+  //imu
   RCCHECK(rclc_publisher_init_default(
     &imuPub,
     &node,
     ROSIDL_GET_MSG_TYPE_SUPPORT(sensor_msgs, msg, Imu),
-    "/imu_link"));
-
+    "imu/data"));
+  //odometry
   RCCHECK(rclc_publisher_init_default(
     &pbodom,
     &node,
     ROSIDL_GET_MSG_TYPE_SUPPORT(nav_msgs, msg, Odometry),
-    "/odom/unfiltered"));
+    "odom/unfiltered"));
 
   // twist subscriber
   RCCHECK(rclc_subscription_init_default(
     &subscriber,
     &node,
     ROSIDL_GET_MSG_TYPE_SUPPORT(geometry_msgs, msg, Twist),
-    "/cmd_vel"));
+    "cmd_vel"));
 
   // create timer,
   const unsigned int timer_timeout = 10;
@@ -215,24 +229,11 @@ bool create_entities() {
   RCCHECK(rclc_executor_add_timer(&executor_pub, &timer));
 
   odom_msg = nav_msgs__msg__Odometry__create();
-
   imu_msg = sensor_msgs__msg__Imu__create();
-  imu_msg->header.frame_id.data = "/base_link";
+
 
   tf_message = tf2_msgs__msg__TFMessage__create();
-  geometry_msgs__msg__TransformStamped__Sequence__init(&tf_message->transforms, 1);
 
-  tf_message->transforms.data[0].header.frame_id.data = (char *)malloc(100 * sizeof(char));
-  char string1[] = "/base_link";
-  memcpy(tf_message->transforms.data[0].header.frame_id.data, string1, strlen(string1) + 1);
-  tf_message->transforms.data[0].header.frame_id.size = strlen(tf_message->transforms.data[0].header.frame_id.data);
-  tf_message->transforms.data[0].header.frame_id.capacity = 100;
-
-  char string2[] = "/left_back_wheel";
-  tf_message->transforms.data[0].child_frame_id.data = (char *)malloc(100 * sizeof(char));
-  memcpy(tf_message->transforms.data[0].child_frame_id.data, string2, strlen(string2) + 1);
-  tf_message->transforms.data[0].child_frame_id.size = strlen(tf_message->transforms.data[0].child_frame_id.data);
-  tf_message->transforms.data[0].child_frame_id.capacity = 100;
 
   return true;
 }
@@ -259,11 +260,12 @@ void setup() {
   Motor.M2.attach(Motor.Right, PWM_MIN, PWM_MAX);
   Motor.sLin.attach(Motor.Lineal, 1000, 2000);
   Motor.sRad.attach(Motor.Radial, 1000, 2000);
+  pinMode(encoder.enc1A, INPUT);
+  pinMode(encoder.enc1B, INPUT);
   attachInterrupt(digitalPinToInterrupt(encoder.enc1A), encodeA1, CHANGE);
   attachInterrupt(digitalPinToInterrupt(encoder.enc1B), encodeB1, CHANGE);
   attachInterrupt(digitalPinToInterrupt(encoder.enc2A), encodeA2, CHANGE);
   attachInterrupt(digitalPinToInterrupt(encoder.enc2B), encodeB2, CHANGE);
-
 
   IMU.begin();
   IMU.setAccelerometerRange(MPU6050_RANGE_8_G);
@@ -297,33 +299,24 @@ void loop() {
     case AGENT_CONNECTED:
       EXECUTE_EVERY_N_MS(200, state = (RMW_RET_OK == rmw_uros_ping_agent(100, 1)) ? AGENT_CONNECTED : AGENT_DISCONNECTED;);
       if (state == AGENT_CONNECTED) {
+
+        unsigned long now = millis();
+        float vel_dt = (now - prev_odom_update) / 1000.0;
+        prev_odom_update = now;
         Imudat();
-        // Tf_dat();
-        // odometria();
-        odomDat();
+        encoderrpm(encoder.count1, encoder.count2);
+        velx = ((wD * 3.14) * (rpmx * 60));
+        vely = ((wD * 3.14) * (rpmy * 60));
+        Linear_x = (velx + vely) / 2;
+        Angular_z = (velx - vely) / 2;
+        odomDat(vel_dt, Linear_x, 0, Angular_z);
+
         struct timespec tv = { 0 };
         clock_gettime(0, &tv);
-
-        double q[4];
-        euler_to_quat(0, 0, 0, q);
-
-        tf_message->transforms.data[0].transform.rotation.w = encoder.count1;
-        tf_message->transforms.data[0].transform.rotation.x = encoder.count1;
-        tf_message->transforms.data[0].transform.rotation.y = 0;
-        tf_message->transforms.data[0].transform.rotation.z = 0;
-        tf_message->transforms.data[0].transform.translation.x = 0.1323;
-        tf_message->transforms.data[0].transform.translation.y = -0.2;
-        tf_message->transforms.data[0].transform.translation.z = 0.0235;
-        tf_message->transforms.data[0].header.stamp.nanosec = tv.tv_nsec;
-        tf_message->transforms.data[0].header.stamp.sec = tv.tv_sec;
-
-
-
 
         rclc_executor_spin_some(&executor_sub, RCL_MS_TO_NS(100));
         rclc_executor_spin_some(&executor_pub, RCL_MS_TO_NS(100));
         rcl_publish(&pubenco, &msg_enco, NULL);
-        // rcl_publish(&pubenco, &msg_enco, NULL);
         rcl_publish(&imuPub, imu_msg, NULL);
         rcl_publish(&pbodom, odom_msg, NULL);
         rcl_publish(&pubtf, tf_message, NULL);
@@ -352,7 +345,6 @@ void calibrateGyro() {
     gyro_cal_.x += g.gyro.x;
     gyro_cal_.y += g.gyro.y;
     gyro_cal_.z += g.gyro.z;
-
     delay(50);
   }
 
@@ -369,7 +361,7 @@ void Imudat() {
   sensors_event_t a, g, temp;
   IMU.getEvent(&a, &g, &temp);
 
-  imu_msg->header.frame_id.data = "/imu_link";
+  imu_msg->header.frame_id.data = "imu_link";
   imu_msg->angular_velocity.x -= gyro_cal_.x;
   imu_msg->angular_velocity.y -= gyro_cal_.y;
   imu_msg->angular_velocity.z -= gyro_cal_.z;
@@ -430,35 +422,51 @@ void Move() {
   }
 }
 
-void odomDat() {
+void odomDat(float vel_dt, float linear_vel_x, float linear_vel_y, float angular_vel_z) {
 
+
+
+  float delta_heading = angular_vel_z * vel_dt;  //radians
+  float cos_h = cos(heading_);
+  float sin_h = sin(heading_);
+  float delta_x = (linear_vel_x * cos_h - linear_vel_y * sin_h) * vel_dt;  //m
+  float delta_y = (linear_vel_x * sin_h + linear_vel_y * cos_h) * vel_dt;  //m
+
+  //calculate current position of the robot
+  x_pos_ += delta_x;
+  y_pos_ += delta_y;
+  heading_ += delta_heading;
+
+  float q[4];
+  euler_to_quat(0, 0, heading_, q);
   struct timespec time_stamp = getTime();
 
-  odom_msg->header.frame_id.data = "/odom";
-  odom_msg->child_frame_id.data = "/base_footprint";
+  odom_msg->header.frame_id.data = "odom";
+  odom_msg->child_frame_id.data = "base_footprint";
 
-  odom_msg->pose.pose.position.x = encoder.count1;
-  odom_msg->pose.pose.position.y = 0.0;
+  odom_msg->pose.pose.position.x = x_pos_;
+  odom_msg->pose.pose.position.y = y_pos_;
   odom_msg->pose.pose.position.z = 0.0;
 
-  odom_msg->pose.pose.orientation.w = 1.0;  //quaternion
-  odom_msg->pose.pose.orientation.x = 0.0;
-  odom_msg->pose.pose.orientation.y = 0.0;
-  odom_msg->pose.pose.orientation.z = 0.0;
+  odom_msg->pose.pose.orientation.x = (double)q[1];
+  odom_msg->pose.pose.orientation.y = (double)q[2];
+  odom_msg->pose.pose.orientation.z = (double)q[3];
+  odom_msg->pose.pose.orientation.w = (double)q[0];
 
-  odom_msg->pose.covariance[0] = 0.0001;
+  odom_msg->pose.covariance[0] = 0.0001;  // covarianza
   odom_msg->pose.covariance[7] = 0.0001;
   odom_msg->pose.covariance[35] = 0.0001;
 
   //linear speed encoder
-  odom_msg->twist.twist.linear.x = 0.3;  //velocidad encoder
-  odom_msg->twist.twist.linear.y = 0.0;
+  odom_msg->twist.twist.linear.x = linear_vel_x;
+  ;  //velocidad encoder
+  odom_msg->twist.twist.linear.y = linear_vel_y;
   odom_msg->twist.twist.linear.z = 0.0;
 
   //angular speed encoder
   odom_msg->twist.twist.angular.x = 0;
   odom_msg->twist.twist.angular.y = 0;
-  odom_msg->twist.twist.angular.z = 0;  //angular speed
+  odom_msg->twist.twist.angular.z = angular_vel_z;  //angular speed
 
   odom_msg->twist.covariance[0] = 0.0001;
   odom_msg->twist.covariance[7] = 0.0001;
@@ -484,7 +492,7 @@ struct timespec getTime() {
 }
 void encodeA1() {
   if (digitalRead(encoder.enc1A) == digitalRead(encoder.enc1B)) {
-    encoder.count1 = encoder.count1 + 1;
+    encoder.count1++;
   }
 }
 void encodeB1() {
@@ -501,6 +509,22 @@ void encodeB2() {
   if (digitalRead(encoder.enc2A) == digitalRead(encoder.enc2B)) {
     encoder.count2--;
   }
+}
+
+void encoderrpm(long pulsosx, long pulsosy) {
+  // long pulsos;
+  unsigned long current_time = micros();
+  unsigned long dt = current_time - prev_update_time;
+
+  double dtm = (double)dt / 60000000;
+  double delta_pulsosx = pulsosx - prev_pulsosx;
+  double delta_pulsosy = pulsosy - prev_pulsosy;
+
+  prev_update_time = current_time;
+  prev_pulsosx = pulsosx;
+  prev_pulsosy = pulsosy;
+  rpmx = ((delta_pulsosx / PPR) / dtm);
+  rpmy = ((delta_pulsosy / PPR) / dtm);
 }
 void rclErrorLoop() {
   while (true) {
