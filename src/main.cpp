@@ -39,20 +39,20 @@ long prev_pulsosx;
 long prev_pulsosy;
 
 
-#define RCCHECK(fn) \
-  { \
-    rcl_ret_t temp_rc = fn; \
-    if ((temp_rc != RCL_RET_OK)) { rclErrorLoop(); } \
+#define RCCHECK(fn) 
+  { 
+    rcl_ret_t temp_rc = fn; 
+    if ((temp_rc != RCL_RET_OK)) { rclErrorLoop(); } 
   }
 
-#define EXECUTE_EVERY_N_MS(MS, X) \
-  do { \
-    static volatile int64_t init = -1; \
-    if (init == -1) { init = uxr_millis(); } \
-    if (uxr_millis() - init > MS) { \
-      X; \
-      init = uxr_millis(); \
-    } \
+#define EXECUTE_EVERY_N_MS(MS, X) 
+  do { 
+    static volatile int64_t init = -1; 
+    if (init == -1) { init = uxr_millis(); } 
+    if (uxr_millis() - init > MS) { 
+      X; 
+      init = uxr_millis(); 
+    } 
   } while (0)
 
 
@@ -103,10 +103,10 @@ const int L1 = 16;
 const int luces = 14;
 
 struct encoder {
-  int enc1A = 36;  // encoder izquierda canal A
-  int enc1B = 39;  // encoder izquierda canal B
-  int enc2A = 34;  // encoder derecha canal A
-  int enc2B = 35;  // encoder derecha canal B
+  int enc1A = 36;  // 15 encoder izquierda canal A
+  int enc1B = 39;  // 2 encoder izquierda canal B
+  int enc2A = 34;  // 0 encoder derecha canal A
+  int enc2B = 35;  // 4 encoder derecha canal B
   int count1 = 0;
   int count2 = 0;
 } encoder;
@@ -461,7 +461,7 @@ void odomDat(float vel_dt, float linear_vel_x, float linear_vel_y, float angular
 
   //linear speed encoder
   odom_msg->twist.twist.linear.x = linear_vel_x;
-  ;  //velocidad encoder
+    //velocidad encoder
   odom_msg->twist.twist.linear.y = linear_vel_y;
   odom_msg->twist.twist.linear.z = 0.0;
 
