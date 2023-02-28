@@ -99,14 +99,13 @@ struct Motor {
   const int Lineal = 25;
   const int Radial = 26;
 } Motor;
-const int L1 = 16;
 const int luces = 14;
 
 struct encoder {
   int enc1A = 15;  // 15 encoder izquierda canal A
-  int enc1B = 2;  // 2 encoder izquierda canal B
-  int enc2A = 0;  // 0 encoder derecha canal A
-  int enc2B = 4;  // 4 encoder derecha canal B
+  int enc1B = 2;   // 2 encoder izquierda canal B
+  int enc2A = 0;   // 0 encoder derecha canal A
+  int enc2B = 4;   // 4 encoder derecha canal B
   int count1 = 0;
   int count2 = 0;
 } encoder;
@@ -251,8 +250,6 @@ void destroy_entities() {
 
 void setup() {
   set_microros_transports();
-  pinMode(L1, OUTPUT);
-  pinMode(LED_PIN, OUTPUT);
   pinMode(Pump.agua, OUTPUT);
   pinMode(Pump.gel, OUTPUT);
   Luces.attach(luces, 1000, 2000);
@@ -268,6 +265,9 @@ void setup() {
   attachInterrupt(digitalPinToInterrupt(encoder.enc1B), encodeB1, CHANGE);
   attachInterrupt(digitalPinToInterrupt(encoder.enc2A), encodeA2, CHANGE);
   attachInterrupt(digitalPinToInterrupt(encoder.enc2B), encodeB2, CHANGE);
+  Motor.M1.write(90);
+  Motor.M2.write(90);
+  Luces.write(180);
 
   IMU.begin();
   IMU.setAccelerometerRange(MPU6050_RANGE_8_G);
@@ -461,7 +461,7 @@ void odomDat(float vel_dt, float linear_vel_x, float linear_vel_y, float angular
 
   //linear speed encoder
   odom_msg->twist.twist.linear.x = linear_vel_x;
-    //velocidad encoder
+  //velocidad encoder
   odom_msg->twist.twist.linear.y = linear_vel_y;
   odom_msg->twist.twist.linear.z = 0.0;
 
