@@ -26,7 +26,6 @@
 #define PWM_MIN 1250
 #define PWM_MAX 1750
 #define WHEEL_DIAM 0.12
-#define PPR 537
 
 float x_pos_ = (0.0);
 float y_pos_ = (0.0);
@@ -39,20 +38,12 @@ long prev_pulsosx;
 long prev_pulsosy;
 
 
-#define RCCHECK(fn) \
-  { \
-    rcl_ret_t temp_rc = fn; \
-    if ((temp_rc != RCL_RET_OK)) { rclErrorLoop(); } \
-  }
+#define RCCHECK(fn){ rcl_ret_t temp_rc = fn; if ((temp_rc != RCL_RET_OK)) { rclErrorLoop(); }}
 
-#define EXECUTE_EVERY_N_MS(MS, X) \
-  do { \
+#define EXECUTE_EVERY_N_MS(MS, X) do { \
     static volatile int64_t init = -1; \
     if (init == -1) { init = uxr_millis(); } \
-    if (uxr_millis() - init > MS) { \
-      X; \
-      init = uxr_millis(); \
-    } \
+    if (uxr_millis() - init > MS) { X;init = uxr_millis();} \
   } while (0)
 
 
@@ -94,18 +85,18 @@ struct Motor {
   Servo M2;
   Servo sLin;
   Servo sRad;
-  const int Left = 31;
-  const int Right = 32;
-  const int Lineal = 25;
-  const int Radial = 26;
+  const int Left = 31; //Pin motor 1
+  const int Right = 32; // Pin motor 2
+  const int Lineal = 25; //pin Servo Lineal toma de muestras
+  const int Radial = 26; // pin servo Radial toma de muestras
 } Motor;
 const int luces = 14;
 
 struct encoder {
-  int enc1A = 15;  // 15 encoder izquierda canal A
-  int enc1B = 2;   // 2 encoder izquierda canal B
-  int enc2A = 0;   // 0 encoder derecha canal A
-  int enc2B = 4;   // 4 encoder derecha canal B
+  int enc1A = 15;  // 36 encoder izquierda canal A
+  int enc1B = 2;   // 39 encoder izquierda canal B
+  int enc2A = 0;   // 34 encoder derecha canal A
+  int enc2B = 4;   // 35 encoder derecha canal B
   int count1 = 0;
   int count2 = 0;
 } encoder;
@@ -117,20 +108,18 @@ float accel_cov_ = 0.00001;
 float gyro_cov_ = 0.00001;
 const int sample_size_ = 40;
 
-int count = 0;
-int countA;
 unsigned long long time_offset = 0;
 Adafruit_MPU6050 IMU;
-float wS = 0.29;
-float wD = 0.12;
-int ppr = 537;
+float wS = 0.29; //separacion de ruedas
+float wD = 0.12; // distancia entre ruedas
+int PPR = 537; // pulsos por revolucion, resolucion encoder
 
 float velx;
 float vely;
 
-float rpmx;
-float rpmy;
-float Linear_x;
+float rpmx; // rpm motor 1
+float rpmy; // rpm motor 2
+float Linear_x; 
 float Angular_z;
 
 
@@ -178,18 +167,6 @@ bool create_entities() {
   // create node
   RCCHECK(rclc_node_init_default(&node, "microRos_Node", "", &support));
 
-  //dato bruto
-  RCCHECK(rclc_publisher_init_default(
-    &pubenco,
-    &node,
-    ROSIDL_GET_MSG_TYPE_SUPPORT(std_msgs, msg, Int32),
-    "wheel"));
-  //tf
-  RCCHECK(rclc_publisher_init_default(
-    &pubtf,
-    &node,
-    ROSIDL_GET_MSG_TYPE_SUPPORT(tf2_msgs, msg, TFMessage),
-    "tf"));
   //imu
   RCCHECK(rclc_publisher_init_default(
     &imuPub,
@@ -227,12 +204,8 @@ bool create_entities() {
   RCCHECK(rclc_executor_init(&executor_pub, &support.context, 1, &allocator));
   RCCHECK(rclc_executor_add_timer(&executor_pub, &timer));
 
-  odom_msg = nav_msgs__msg__Odometry__create();
-  imu_msg = sensor_msgs__msg__Imu__create();
-
-
-  tf_message = tf2_msgs__msg__TFMessage__create();
-
+  // odom_msg = nav_msgs__msg__Odometry__create();
+  // imu_msg = sensor_msgs__msg__Imu__create();
 
   return true;
 }
@@ -278,16 +251,7 @@ void setup() {
 }
 
 void loop() {
-  Move();
-  if (encoder.count1 != countA) {
-    countA = encoder.count1;
-    msg_enco.data = encoder.count1;
-  }
-
-
-  int rot = 0;
-
-
+ 
   switch (state) {
     case WAITING_AGENT:
       EXECUTE_EVERY_N_MS(500, state = (RMW_RET_OK == rmw_uros_ping_agent(100, 1)) ? AGENT_AVAILABLE : WAITING_AGENT;);
@@ -301,7 +265,7 @@ void loop() {
     case AGENT_CONNECTED:
       EXECUTE_EVERY_N_MS(200, state = (RMW_RET_OK == rmw_uros_ping_agent(100, 1)) ? AGENT_CONNECTED : AGENT_DISCONNECTED;);
       if (state == AGENT_CONNECTED) {
-
+         Move();
         unsigned long now = millis();
         float vel_dt = (now - prev_odom_update) / 1000.0;
         prev_odom_update = now;
