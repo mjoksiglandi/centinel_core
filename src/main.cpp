@@ -8,12 +8,9 @@
 
 #include <rmw_microros/rmw_microros.h>
 #include <geometry_msgs/msg/twist.h>
-#include <std_msgs/msg/int32.h>
-#include <tf2_msgs/msg/tf_message.h>
 #include <geometry_msgs/msg/transform_stamped.h>
 
 #include <sensor_msgs/msg/imu.h>
-#include <sensor_msgs/msg/joint_state.h>
 #include <nav_msgs/msg/odometry.h>
 #include <geometry_msgs/msg/vector3.h>
 
@@ -26,10 +23,7 @@
 #define PWM_MIN 1250
 #define PWM_MAX 1750
 #define WHEEL_DIAM 0.12
-
-float x_pos_ = (0.0);
-float y_pos_ = (0.0);
-float heading_ = (0.0);
+#define PPR 1075
 
 uint32_t timer2;
 unsigned long prev_odom_update = 0;
@@ -38,13 +32,15 @@ long prev_pulsosx;
 long prev_pulsosy;
 
 
+// #define RCCHECK(fn) \
+//   { \
+//     rcl_ret_t temp_rc = fn; \
+//     if ((temp_rc != RCL_RET_OK)) { rclErrorLoop(); } \
+//   }
+
 #define RCCHECK(fn){ rcl_ret_t temp_rc = fn; if ((temp_rc != RCL_RET_OK)) { rclErrorLoop(); }}
 
-#define EXECUTE_EVERY_N_MS(MS, X) do { \
-    static volatile int64_t init = -1; \
-    if (init == -1) { init = uxr_millis(); } \
-    if (uxr_millis() - init > MS) { X;init = uxr_millis();} \
-  } while (0)
+#define EXECUTE_EVERY_N_MS(MS, X) do {static volatile int64_t init = -1; if (init == -1) { init = uxr_millis(); } if (uxr_millis() - init > MS) {X;init = uxr_millis();}} while (0)
 
 
 rcl_allocator_t allocator;
@@ -59,11 +55,8 @@ rclc_executor_t executor_sub;
 
 
 /////publishers
-rcl_publisher_t publisher, pubenco, pubtf, imuPub, pbjoint, pbodom;
-std_msgs__msg__Int32 msg_th, msg_enco;
-tf2_msgs__msg__TFMessage *tf_message;
+rcl_publisher_t Imu_Publisher, odom_Publisher;
 sensor_msgs__msg__Imu *imu_msg;
-sensor_msgs__msg__JointState *joint;
 nav_msgs__msg__Odometry *odom_msg;
 geometry_msgs__msg__Vector3 gyro_cal_;
 rclc_executor_t executor_pub;
@@ -85,18 +78,18 @@ struct Motor {
   Servo M2;
   Servo sLin;
   Servo sRad;
-  const int Left = 31; //Pin motor 1
-  const int Right = 32; // Pin motor 2
-  const int Lineal = 25; //pin Servo Lineal toma de muestras
-  const int Radial = 26; // pin servo Radial toma de muestras
+  const int Left = 33;
+  const int Right = 32;
+  const int Lineal = 25;
+  const int Radial = 26;
 } Motor;
 const int luces = 14;
 
 struct encoder {
-  int enc1A = 15;  // 36 encoder izquierda canal A
-  int enc1B = 2;   // 39 encoder izquierda canal B
-  int enc2A = 0;   // 34 encoder derecha canal A
-  int enc2B = 4;   // 35 encoder derecha canal B
+  int enc1A = 15;  // 15 encoder izquierda canal A
+  int enc1B = 2;   // 2 encoder izquierda canal B
+  int enc2A = 0;   // 0 encoder derecha canal A
+  int enc2B = 4;   // 4 encoder derecha canal B
   int count1 = 0;
   int count2 = 0;
 } encoder;
@@ -110,16 +103,16 @@ const int sample_size_ = 40;
 
 unsigned long long time_offset = 0;
 Adafruit_MPU6050 IMU;
-float wS = 0.29; //separacion de ruedas
-float wD = 0.12; // distancia entre ruedas
-int PPR = 537; // pulsos por revolucion, resolucion encoder
+float wS = 0.29;
+float wD = 0.12;
+int ppr = 537;
 
 float velx;
 float vely;
 
-float rpmx; // rpm motor 1
-float rpmy; // rpm motor 2
-float Linear_x; 
+float rpmx;
+float rpmy;
+float Linear_x;
 float Angular_z;
 
 
@@ -169,13 +162,13 @@ bool create_entities() {
 
   //imu
   RCCHECK(rclc_publisher_init_default(
-    &imuPub,
+    &Imu_Publisher,
     &node,
     ROSIDL_GET_MSG_TYPE_SUPPORT(sensor_msgs, msg, Imu),
     "imu/data"));
   //odometry
   RCCHECK(rclc_publisher_init_default(
-    &pbodom,
+    &odom_Publisher,
     &node,
     ROSIDL_GET_MSG_TYPE_SUPPORT(nav_msgs, msg, Odometry),
     "odom/unfiltered"));
@@ -204,9 +197,8 @@ bool create_entities() {
   RCCHECK(rclc_executor_init(&executor_pub, &support.context, 1, &allocator));
   RCCHECK(rclc_executor_add_timer(&executor_pub, &timer));
 
-  // odom_msg = nav_msgs__msg__Odometry__create();
-  // imu_msg = sensor_msgs__msg__Imu__create();
-
+  odom_msg = nav_msgs__msg__Odometry__create();
+  imu_msg = sensor_msgs__msg__Imu__create();
   return true;
 }
 
@@ -214,7 +206,8 @@ void destroy_entities() {
   rmw_context_t *rmw_context = rcl_context_get_rmw_context(&support.context);
   (void)rmw_uros_set_context_entity_destroy_session_timeout(rmw_context, 0);
 
-  rcl_publisher_fini(&publisher, &node);
+  rcl_publisher_fini(&odom_Publisher, &node);
+  rcl_publisher_fini(&Imu_Publisher, &node);
   rcl_timer_fini(&timer);
   rclc_executor_fini(&executor_sub);
   rcl_node_fini(&node);
@@ -243,14 +236,16 @@ void setup() {
   Luces.write(180);
 
   IMU.begin();
-  IMU.setAccelerometerRange(MPU6050_RANGE_8_G);
-  IMU.setGyroRange(MPU6050_RANGE_500_DEG);
-  IMU.setFilterBandwidth(MPU6050_BAND_21_HZ);
+
+  IMU.setAccelerometerRange(MPU6050_RANGE_4_G);
+  IMU.setGyroRange(MPU6050_RANGE_250_DEG);
+  IMU.setFilterBandwidth(MPU6050_BAND_10_HZ);
 
   state = WAITING_AGENT;
 }
 
 void loop() {
+
  
   switch (state) {
     case WAITING_AGENT:
@@ -265,7 +260,7 @@ void loop() {
     case AGENT_CONNECTED:
       EXECUTE_EVERY_N_MS(200, state = (RMW_RET_OK == rmw_uros_ping_agent(100, 1)) ? AGENT_CONNECTED : AGENT_DISCONNECTED;);
       if (state == AGENT_CONNECTED) {
-         Move();
+
         unsigned long now = millis();
         float vel_dt = (now - prev_odom_update) / 1000.0;
         prev_odom_update = now;
@@ -276,16 +271,16 @@ void loop() {
         Linear_x = (velx + vely) / 2;
         Angular_z = (velx - vely) / 2;
         odomDat(vel_dt, Linear_x, 0, Angular_z);
-
+        Move();
         struct timespec tv = { 0 };
         clock_gettime(0, &tv);
 
         rclc_executor_spin_some(&executor_sub, RCL_MS_TO_NS(100));
         rclc_executor_spin_some(&executor_pub, RCL_MS_TO_NS(100));
-        rcl_publish(&pubenco, &msg_enco, NULL);
-        rcl_publish(&imuPub, imu_msg, NULL);
-        rcl_publish(&pbodom, odom_msg, NULL);
-        rcl_publish(&pubtf, tf_message, NULL);
+      
+        rcl_publish(&Imu_Publisher, imu_msg, NULL);
+        rcl_publish(&odom_Publisher, odom_msg, NULL);
+     
       }
       break;
     case AGENT_DISCONNECTED:
@@ -301,60 +296,6 @@ void loop() {
   } else {
     // digitalWrite(estado.Led1, LOW);
   }
-}
-void calibrateGyro() {
-  geometry_msgs__msg__Vector3 gyro;
-
-  for (int i = 0; i < sample_size_; i++) {
-    sensors_event_t a, g, temp;
-    IMU.getEvent(&a, &g, &temp);
-    gyro_cal_.x += g.gyro.x;
-    gyro_cal_.y += g.gyro.y;
-    gyro_cal_.z += g.gyro.z;
-    delay(50);
-  }
-
-  gyro_cal_.x = gyro_cal_.x / (float)sample_size_;
-  gyro_cal_.y = gyro_cal_.y / (float)sample_size_;
-  gyro_cal_.z = gyro_cal_.z / (float)sample_size_;
-}
-
-void Imudat() {
-  struct timespec time_stamp = getTime();
-
-  calibrateGyro();
-
-  sensors_event_t a, g, temp;
-  IMU.getEvent(&a, &g, &temp);
-
-  imu_msg->header.frame_id.data = "imu_link";
-  imu_msg->angular_velocity.x -= gyro_cal_.x;
-  imu_msg->angular_velocity.y -= gyro_cal_.y;
-  imu_msg->angular_velocity.z -= gyro_cal_.z;
-
-  if (imu_msg->angular_velocity.x > -0.01 && imu_msg->angular_velocity.x < 0.01)
-    imu_msg->angular_velocity.x = 0;
-
-  if (imu_msg->angular_velocity.y > -0.01 && imu_msg->angular_velocity.y < 0.01)
-    imu_msg->angular_velocity.y = 0;
-
-  if (imu_msg->angular_velocity.z > -0.01 && imu_msg->angular_velocity.z < 0.01)
-    imu_msg->angular_velocity.z = 0;
-
-  imu_msg->angular_velocity_covariance[0] = gyro_cov_;
-  imu_msg->angular_velocity_covariance[4] = gyro_cov_;
-  imu_msg->angular_velocity_covariance[8] = gyro_cov_;
-
-  //imu_msg->linear_acceleration = a.acceleration();
-  imu_msg->linear_acceleration.x = a.acceleration.x;
-  imu_msg->linear_acceleration.y = a.acceleration.y;
-  imu_msg->linear_acceleration.z = a.acceleration.z;
-
-  imu_msg->linear_acceleration_covariance[0] = accel_cov_;
-  imu_msg->linear_acceleration_covariance[4] = accel_cov_;
-  imu_msg->linear_acceleration_covariance[8] = accel_cov_;
-  imu_msg->header.stamp.sec = time_stamp.tv_sec;
-  imu_msg->header.stamp.nanosec = time_stamp.tv_nsec;
 }
 
 void Move() {
@@ -388,9 +329,68 @@ void Move() {
   }
 }
 
+void calibrateGyro() {
+  geometry_msgs__msg__Vector3 gyro;
+
+  for (int i = 0; i < sample_size_; i++) {
+    sensors_event_t a, g, temp;
+    IMU.getEvent(&a, &g, &temp);
+    gyro_cal_.x += g.gyro.x;
+    gyro_cal_.y += g.gyro.y;
+    gyro_cal_.z += g.gyro.z;
+    delay(50);
+  }
+
+  gyro_cal_.x = gyro_cal_.x / (float)sample_size_;
+  gyro_cal_.y = gyro_cal_.y / (float)sample_size_;
+  gyro_cal_.z = gyro_cal_.z / (float)sample_size_;
+}
+
+void Imudat() {
+  struct timespec time_stamp = getTime();
+
+  calibrateGyro();
+
+  sensors_event_t a, g, temp;
+  IMU.getEvent(&a, &g, &temp);
+
+
+  imu_msg->header.frame_id.data = "imu_link";
+  imu_msg->angular_velocity.x -= gyro_cal_.x;
+  imu_msg->angular_velocity.y -= gyro_cal_.y;
+  imu_msg->angular_velocity.z -= gyro_cal_.z;
+
+  if (imu_msg->angular_velocity.x > -0.01 && imu_msg->angular_velocity.x < 0.01)
+    imu_msg->angular_velocity.x = 0;
+
+  if (imu_msg->angular_velocity.y > -0.01 && imu_msg->angular_velocity.y < 0.01)
+    imu_msg->angular_velocity.y = 0;
+
+  if (imu_msg->angular_velocity.z > -0.01 && imu_msg->angular_velocity.z < 0.01)
+    imu_msg->angular_velocity.z = 0;
+
+  imu_msg->angular_velocity_covariance[0] = gyro_cov_;
+  imu_msg->angular_velocity_covariance[4] = gyro_cov_;
+  imu_msg->angular_velocity_covariance[8] = gyro_cov_;
+
+  //imu_msg->linear_acceleration = a.acceleration();
+  imu_msg->linear_acceleration.x = a.acceleration.x;
+  imu_msg->linear_acceleration.y = a.acceleration.y;
+  imu_msg->linear_acceleration.z = a.acceleration.z;
+
+  imu_msg->linear_acceleration_covariance[0] = accel_cov_;
+  imu_msg->linear_acceleration_covariance[4] = accel_cov_;
+  imu_msg->linear_acceleration_covariance[8] = accel_cov_;
+  imu_msg->header.stamp.sec = time_stamp.tv_sec;
+  imu_msg->header.stamp.nanosec = time_stamp.tv_nsec;
+}
+
 void odomDat(float vel_dt, float linear_vel_x, float linear_vel_y, float angular_vel_z) {
 
 
+  float x_pos_ = (0.0);
+  float y_pos_ = (0.0);
+  float heading_ = (0.0);
 
   float delta_heading = angular_vel_z * vel_dt;  //radians
   float cos_h = cos(heading_);
