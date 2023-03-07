@@ -38,9 +38,21 @@ long prev_pulsosy;
 //     if ((temp_rc != RCL_RET_OK)) { rclErrorLoop(); } \
 //   }
 
-#define RCCHECK(fn){ rcl_ret_t temp_rc = fn; if ((temp_rc != RCL_RET_OK)) { rclErrorLoop(); }}
+#define RCCHECK(fn) \
+  { \
+    rcl_ret_t temp_rc = fn; \
+    if ((temp_rc != RCL_RET_OK)) { rclErrorLoop(); } \
+  }
 
-#define EXECUTE_EVERY_N_MS(MS, X) do {static volatile int64_t init = -1; if (init == -1) { init = uxr_millis(); } if (uxr_millis() - init > MS) {X;init = uxr_millis();}} while (0)
+#define EXECUTE_EVERY_N_MS(MS, X) \
+  do { \
+    static volatile int64_t init = -1; \
+    if (init == -1) { init = uxr_millis(); } \
+    if (uxr_millis() - init > MS) { \
+      X; \
+      init = uxr_millis(); \
+    } \
+  } while (0)
 
 
 rcl_allocator_t allocator;
@@ -246,7 +258,7 @@ void setup() {
 
 void loop() {
 
- 
+
   switch (state) {
     case WAITING_AGENT:
       EXECUTE_EVERY_N_MS(500, state = (RMW_RET_OK == rmw_uros_ping_agent(100, 1)) ? AGENT_AVAILABLE : WAITING_AGENT;);
@@ -277,10 +289,9 @@ void loop() {
 
         rclc_executor_spin_some(&executor_sub, RCL_MS_TO_NS(100));
         rclc_executor_spin_some(&executor_pub, RCL_MS_TO_NS(100));
-      
-        rcl_publish(&Imu_Publisher, imu_msg, NULL);
-        rcl_publish(&odom_Publisher, odom_msg, NULL);
-     
+
+        rcl_publish(&Imu_Publisher, &imu_msg, NULL);
+        rcl_publish(&odom_Publisher, &odom_msg, NULL);
       }
       break;
     case AGENT_DISCONNECTED:
