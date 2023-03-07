@@ -67,9 +67,10 @@ rclc_executor_t executor_sub;
 
 
 /////publishers
-rcl_publisher_t Imu_Publisher, odom_Publisher;
-sensor_msgs__msg__Imu *imu_msg;
-nav_msgs__msg__Odometry *odom_msg;
+rcl_publisher_t Imu_Publisher;
+rcl_publisher_t odom_Publisher;
+sensor_msgs__msg__Imu imu_msg;
+nav_msgs__msg__Odometry odom_msg;
 geometry_msgs__msg__Vector3 gyro_cal_;
 rclc_executor_t executor_pub;
 
@@ -171,7 +172,6 @@ bool create_entities() {
 
   // create node
   RCCHECK(rclc_node_init_default(&node, "microRos_Node", "", &support));
-
   //imu
   RCCHECK(rclc_publisher_init_default(
     &Imu_Publisher,
@@ -209,8 +209,8 @@ bool create_entities() {
   RCCHECK(rclc_executor_init(&executor_pub, &support.context, 1, &allocator));
   RCCHECK(rclc_executor_add_timer(&executor_pub, &timer));
 
-  odom_msg = nav_msgs__msg__Odometry__create();
-  imu_msg = sensor_msgs__msg__Imu__create();
+  // odom_msg = nav_msgs__msg__Odometry__create();
+  // imu_msg = sensor_msgs__msg__Imu__create();
   return true;
 }
 
@@ -272,6 +272,8 @@ void loop() {
     case AGENT_CONNECTED:
       EXECUTE_EVERY_N_MS(200, state = (RMW_RET_OK == rmw_uros_ping_agent(100, 1)) ? AGENT_CONNECTED : AGENT_DISCONNECTED;);
       if (state == AGENT_CONNECTED) {
+        syncTime();
+        struct timespec time_stamp = getTime();
 
         unsigned long now = millis();
         float vel_dt = (now - prev_odom_update) / 1000.0;
@@ -284,11 +286,18 @@ void loop() {
         Angular_z = (velx - vely) / 2;
         odomDat(vel_dt, Linear_x, 0, Angular_z);
         Move();
-        struct timespec tv = { 0 };
-        clock_gettime(0, &tv);
+
 
         rclc_executor_spin_some(&executor_sub, RCL_MS_TO_NS(100));
         rclc_executor_spin_some(&executor_pub, RCL_MS_TO_NS(100));
+
+        imu_msg.header.stamp.sec = time_stamp.tv_sec;
+        imu_msg.header.stamp.nanosec = time_stamp.tv_nsec;
+        imu_msg.header.frame_id.data = "imu_link";
+        odom_msg.header.frame_id.data = "odom";
+        odom_msg.child_frame_id.data = "base_footprint";
+        odom_msg.header.stamp.sec = time_stamp.tv_sec;
+        odom_msg.header.stamp.nanosec = time_stamp.tv_nsec;
 
         rcl_publish(&Imu_Publisher, &imu_msg, NULL);
         rcl_publish(&odom_Publisher, &odom_msg, NULL);
@@ -358,42 +367,34 @@ void calibrateGyro() {
 }
 
 void Imudat() {
-  struct timespec time_stamp = getTime();
-
   calibrateGyro();
-
   sensors_event_t a, g, temp;
   IMU.getEvent(&a, &g, &temp);
+  imu_msg.angular_velocity.x -= gyro_cal_.x;
+  imu_msg.angular_velocity.y -= gyro_cal_.y;
+  imu_msg.angular_velocity.z -= gyro_cal_.z;
 
+  if (imu_msg.angular_velocity.x > -0.01 && imu_msg.angular_velocity.x < 0.01)
+    imu_msg.angular_velocity.x = 0;
 
-  imu_msg->header.frame_id.data = "imu_link";
-  imu_msg->angular_velocity.x -= gyro_cal_.x;
-  imu_msg->angular_velocity.y -= gyro_cal_.y;
-  imu_msg->angular_velocity.z -= gyro_cal_.z;
+  if (imu_msg.angular_velocity.y > -0.01 && imu_msg.angular_velocity.y < 0.01)
+    imu_msg.angular_velocity.y = 0;
 
-  if (imu_msg->angular_velocity.x > -0.01 && imu_msg->angular_velocity.x < 0.01)
-    imu_msg->angular_velocity.x = 0;
+  if (imu_msg.angular_velocity.z > -0.01 && imu_msg.angular_velocity.z < 0.01)
+    imu_msg.angular_velocity.z = 0;
 
-  if (imu_msg->angular_velocity.y > -0.01 && imu_msg->angular_velocity.y < 0.01)
-    imu_msg->angular_velocity.y = 0;
+  imu_msg.angular_velocity_covariance[0] = gyro_cov_;
+  imu_msg.angular_velocity_covariance[4] = gyro_cov_;
+  imu_msg.angular_velocity_covariance[8] = gyro_cov_;
 
-  if (imu_msg->angular_velocity.z > -0.01 && imu_msg->angular_velocity.z < 0.01)
-    imu_msg->angular_velocity.z = 0;
+  //imu_msg.linear_acceleration = a.acceleration();
+  imu_msg.linear_acceleration.x = a.acceleration.x;
+  imu_msg.linear_acceleration.y = a.acceleration.y;
+  imu_msg.linear_acceleration.z = a.acceleration.z;
 
-  imu_msg->angular_velocity_covariance[0] = gyro_cov_;
-  imu_msg->angular_velocity_covariance[4] = gyro_cov_;
-  imu_msg->angular_velocity_covariance[8] = gyro_cov_;
-
-  //imu_msg->linear_acceleration = a.acceleration();
-  imu_msg->linear_acceleration.x = a.acceleration.x;
-  imu_msg->linear_acceleration.y = a.acceleration.y;
-  imu_msg->linear_acceleration.z = a.acceleration.z;
-
-  imu_msg->linear_acceleration_covariance[0] = accel_cov_;
-  imu_msg->linear_acceleration_covariance[4] = accel_cov_;
-  imu_msg->linear_acceleration_covariance[8] = accel_cov_;
-  imu_msg->header.stamp.sec = time_stamp.tv_sec;
-  imu_msg->header.stamp.nanosec = time_stamp.tv_nsec;
+  imu_msg.linear_acceleration_covariance[0] = accel_cov_;
+  imu_msg.linear_acceleration_covariance[4] = accel_cov_;
+  imu_msg.linear_acceleration_covariance[8] = accel_cov_;
 }
 
 void odomDat(float vel_dt, float linear_vel_x, float linear_vel_y, float angular_vel_z) {
@@ -416,42 +417,33 @@ void odomDat(float vel_dt, float linear_vel_x, float linear_vel_y, float angular
 
   float q[4];
   euler_to_quat(0, 0, heading_, q);
-  struct timespec time_stamp = getTime();
 
-  odom_msg->header.frame_id.data = "odom";
-  odom_msg->child_frame_id.data = "base_footprint";
+  odom_msg.pose.pose.position.x = x_pos_;
+  odom_msg.pose.pose.position.y = y_pos_;
+  odom_msg.pose.pose.position.z = 0.0;
 
-  odom_msg->pose.pose.position.x = x_pos_;
-  odom_msg->pose.pose.position.y = y_pos_;
-  odom_msg->pose.pose.position.z = 0.0;
+  odom_msg.pose.pose.orientation.x = (double)q[1];
+  odom_msg.pose.pose.orientation.y = (double)q[2];
+  odom_msg.pose.pose.orientation.z = (double)q[3];
+  odom_msg.pose.pose.orientation.w = (double)q[0];
 
-  odom_msg->pose.pose.orientation.x = (double)q[1];
-  odom_msg->pose.pose.orientation.y = (double)q[2];
-  odom_msg->pose.pose.orientation.z = (double)q[3];
-  odom_msg->pose.pose.orientation.w = (double)q[0];
-
-  odom_msg->pose.covariance[0] = 0.0001;  // covarianza
-  odom_msg->pose.covariance[7] = 0.0001;
-  odom_msg->pose.covariance[35] = 0.0001;
+  odom_msg.pose.covariance[0] = 0.0001;  // covarianza
+  odom_msg.pose.covariance[7] = 0.0001;
+  odom_msg.pose.covariance[35] = 0.0001;
 
   //linear speed encoder
-  odom_msg->twist.twist.linear.x = linear_vel_x;
-  //velocidad encoder
-  odom_msg->twist.twist.linear.y = linear_vel_y;
-  odom_msg->twist.twist.linear.z = 0.0;
+  odom_msg.twist.twist.linear.x = linear_vel_x;
+  odom_msg.twist.twist.linear.y = linear_vel_y;
+  odom_msg.twist.twist.linear.z = 0.0;
 
   //angular speed encoder
-  odom_msg->twist.twist.angular.x = 0;
-  odom_msg->twist.twist.angular.y = 0;
-  odom_msg->twist.twist.angular.z = angular_vel_z;  //angular speed
+  odom_msg.twist.twist.angular.x = 0;
+  odom_msg.twist.twist.angular.y = 0;
+  odom_msg.twist.twist.angular.z = angular_vel_z;  //angular speed
 
-  odom_msg->twist.covariance[0] = 0.0001;
-  odom_msg->twist.covariance[7] = 0.0001;
-  odom_msg->twist.covariance[35] = 0.0001;
-
-
-  odom_msg->header.stamp.sec = time_stamp.tv_sec;
-  odom_msg->header.stamp.nanosec = time_stamp.tv_nsec;
+  odom_msg.twist.covariance[0] = 0.0001;
+  odom_msg.twist.covariance[7] = 0.0001;
+  odom_msg.twist.covariance[35] = 0.0001;
 }
 
 void syncTime() {
