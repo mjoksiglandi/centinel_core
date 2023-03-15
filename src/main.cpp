@@ -19,26 +19,12 @@
 #include <Wire.h>
 
 #include <ESP32Servo.h>
-#define LED_PIN 2
-#define PWM_MIN 1250
-#define PWM_MAX 1750
+#define PWM_MIN 1400
+#define PWM_MAX 1600
 #define WHEEL_DIAM 0.12
 #define PPR 1075
 
-uint32_t timer2;
-unsigned long prev_odom_update = 0;
-unsigned long prev_update_time;
-long prev_pulsosx;
-long prev_pulsosy;
-
-
-// #define RCCHECK(fn) \
-//   { \
-//     rcl_ret_t temp_rc = fn; \
-//     if ((temp_rc != RCL_RET_OK)) { rclErrorLoop(); } \
-//   }
-
-#define RCCHECK(fn) \
+#define RCCHECK(fn) \ 
   { \
     rcl_ret_t temp_rc = fn; \
     if ((temp_rc != RCL_RET_OK)) { rclErrorLoop(); } \
@@ -65,11 +51,10 @@ rcl_subscription_t subscriber;
 geometry_msgs__msg__Twist msg;
 rclc_executor_t executor_sub;
 
-
 /////publishers
 rcl_publisher_t Imu_Publisher;
 rcl_publisher_t odom_Publisher;
-sensor_msgs__msg__Imu imu_msg;
+sensor_msgs__msg__Imu *imu_msg;
 nav_msgs__msg__Odometry odom_msg;
 geometry_msgs__msg__Vector3 gyro_cal_;
 rclc_executor_t executor_pub;
@@ -118,7 +103,7 @@ unsigned long long time_offset = 0;
 Adafruit_MPU6050 IMU;
 float wS = 0.29;
 float wD = 0.12;
-int ppr = 537;
+int ppr = 1075;
 
 float velx;
 float vely;
@@ -127,6 +112,12 @@ float rpmx;
 float rpmy;
 float Linear_x;
 float Angular_z;
+
+uint32_t timer2;
+unsigned long prev_odom_update = 0;
+unsigned long prev_update_time;
+long prev_pulsosx;
+long prev_pulsosy;
 
 
 bool micro_ros_init_successful;
@@ -140,6 +131,9 @@ void subscription_callback(const void *msgin) {
 void timer_callback(rcl_timer_t *timer, int64_t last_call_time) {
   RCLC_UNUSED(last_call_time);
   RCLC_UNUSED(timer);
+  Move();
+  encoderrpm(encoder.count1, encoder.count2);
+  publishdata();
 }
 
 enum states {
@@ -193,7 +187,7 @@ bool create_entities() {
     "cmd_vel"));
 
   // create timer,
-  const unsigned int timer_timeout = 10;
+  const unsigned int timer_timeout = 5;
   RCCHECK(rclc_timer_init_default(
     &timer,
     &support,
@@ -201,7 +195,6 @@ bool create_entities() {
     timer_callback));
 
   // create executor
-  // executor = rclc_executor_get_zero_initialized_executor();
   RCCHECK(rclc_executor_init(&executor_sub, &support.context, 1, &allocator));
   RCCHECK(rclc_executor_add_subscription(&executor_sub, &subscriber, &msg, &subscription_callback, ON_NEW_DATA));
 
@@ -210,7 +203,7 @@ bool create_entities() {
   RCCHECK(rclc_executor_add_timer(&executor_pub, &timer));
 
   // odom_msg = nav_msgs__msg__Odometry__create();
-  // imu_msg = sensor_msgs__msg__Imu__create();
+  imu_msg = sensor_msgs__msg__Imu__create();
   return true;
 }
 
@@ -248,17 +241,22 @@ void setup() {
   Luces.write(180);
 
   IMU.begin();
-
   IMU.setAccelerometerRange(MPU6050_RANGE_4_G);
   IMU.setGyroRange(MPU6050_RANGE_250_DEG);
   IMU.setFilterBandwidth(MPU6050_BAND_10_HZ);
 
+
   state = WAITING_AGENT;
 }
 
+struct timespec getTime() {
+  struct timespec tp = { 0 };
+  unsigned long long now = millis() + time_offset;
+  tp.tv_sec = now / 1000;
+  tp.tv_nsec = (now % 1000) * 1000000;
+  return tp;
+}
 void loop() {
-
-
   switch (state) {
     case WAITING_AGENT:
       EXECUTE_EVERY_N_MS(500, state = (RMW_RET_OK == rmw_uros_ping_agent(100, 1)) ? AGENT_AVAILABLE : WAITING_AGENT;);
@@ -272,35 +270,8 @@ void loop() {
     case AGENT_CONNECTED:
       EXECUTE_EVERY_N_MS(200, state = (RMW_RET_OK == rmw_uros_ping_agent(100, 1)) ? AGENT_CONNECTED : AGENT_DISCONNECTED;);
       if (state == AGENT_CONNECTED) {
-        syncTime();
-        struct timespec time_stamp = getTime();
-
-        unsigned long now = millis();
-        float vel_dt = (now - prev_odom_update) / 1000.0;
-        prev_odom_update = now;
-        Imudat();
-        encoderrpm(encoder.count1, encoder.count2);
-        velx = ((wD * 3.14) * (rpmx * 60));
-        vely = ((wD * 3.14) * (rpmy * 60));
-        Linear_x = (velx + vely) / 2;
-        Angular_z = (velx - vely) / 2;
-        odomDat(vel_dt, Linear_x, 0, Angular_z);
-        Move();
-
-
         rclc_executor_spin_some(&executor_sub, RCL_MS_TO_NS(100));
         rclc_executor_spin_some(&executor_pub, RCL_MS_TO_NS(100));
-
-        imu_msg.header.stamp.sec = time_stamp.tv_sec;
-        imu_msg.header.stamp.nanosec = time_stamp.tv_nsec;
-        imu_msg.header.frame_id.data = "imu_link";
-        odom_msg.header.frame_id.data = "odom";
-        odom_msg.child_frame_id.data = "base_footprint";
-        odom_msg.header.stamp.sec = time_stamp.tv_sec;
-        odom_msg.header.stamp.nanosec = time_stamp.tv_nsec;
-
-        rcl_publish(&Imu_Publisher, &imu_msg, NULL);
-        rcl_publish(&odom_Publisher, &odom_msg, NULL);
       }
       break;
     case AGENT_DISCONNECTED:
@@ -312,10 +283,32 @@ void loop() {
   }
 
   if (state == AGENT_CONNECTED) {
-    // digitalWrite(estado.Led1, HIGH);
+
   } else {
-    // digitalWrite(estado.Led1, LOW);
   }
+}
+
+void publishdata() {
+  struct timespec time_stamp = getTime();
+
+
+  imu_msg->header.stamp.sec = time_stamp.tv_sec;
+  imu_msg->header.stamp.nanosec = time_stamp.tv_nsec;
+
+  odom_msg.header.stamp.sec = time_stamp.tv_sec;
+  odom_msg.header.stamp.nanosec = time_stamp.tv_nsec;
+
+    unsigned long now = millis();
+  float vel_dt = (now - prev_odom_update) / 1000.0;
+  prev_odom_update = now;
+  velx = ((wD * 3.14) * (rpmx * 60));
+  vely = ((wD * 3.14) * (rpmy * 60));
+  Linear_x = (velx + vely) / 2;
+  Angular_z = (velx - vely) / 2;
+  odomDat(vel_dt, Linear_x, 0, Angular_z);
+  Imudat();
+  rcl_publish(&Imu_Publisher, imu_msg, NULL);
+  rcl_publish(&odom_Publisher, &odom_msg, NULL);
 }
 
 void Move() {
@@ -348,16 +341,15 @@ void Move() {
     Motor.M2.write(45);
   }
 }
-
 void calibrateGyro() {
   geometry_msgs__msg__Vector3 gyro;
 
   for (int i = 0; i < sample_size_; i++) {
     sensors_event_t a, g, temp;
     IMU.getEvent(&a, &g, &temp);
-    gyro_cal_.x += g.gyro.x;
-    gyro_cal_.y += g.gyro.y;
-    gyro_cal_.z += g.gyro.z;
+    gyro_cal_.x += g.gyro.roll;
+    gyro_cal_.y += g.gyro.pitch;
+    gyro_cal_.z += g.gyro.heading;
     delay(50);
   }
 
@@ -365,44 +357,45 @@ void calibrateGyro() {
   gyro_cal_.y = gyro_cal_.y / (float)sample_size_;
   gyro_cal_.z = gyro_cal_.z / (float)sample_size_;
 }
-
 void Imudat() {
   calibrateGyro();
   sensors_event_t a, g, temp;
   IMU.getEvent(&a, &g, &temp);
-  imu_msg.angular_velocity.x -= gyro_cal_.x;
-  imu_msg.angular_velocity.y -= gyro_cal_.y;
-  imu_msg.angular_velocity.z -= gyro_cal_.z;
 
-  if (imu_msg.angular_velocity.x > -0.01 && imu_msg.angular_velocity.x < 0.01)
-    imu_msg.angular_velocity.x = 0;
+  imu_msg->header.frame_id.data = "imu_link";
+  imu_msg->angular_velocity.x -= gyro_cal_.x;
+  imu_msg->angular_velocity.y -= gyro_cal_.y;
+  imu_msg->angular_velocity.z -= gyro_cal_.z;
 
-  if (imu_msg.angular_velocity.y > -0.01 && imu_msg.angular_velocity.y < 0.01)
-    imu_msg.angular_velocity.y = 0;
+  if (imu_msg->angular_velocity.x > -0.01 && imu_msg->angular_velocity.x < 0.01)
+    imu_msg->angular_velocity.x = 0;
 
-  if (imu_msg.angular_velocity.z > -0.01 && imu_msg.angular_velocity.z < 0.01)
-    imu_msg.angular_velocity.z = 0;
+  if (imu_msg->angular_velocity.y > -0.01 && imu_msg->angular_velocity.y < 0.01)
+    imu_msg->angular_velocity.y = 0;
 
-  imu_msg.angular_velocity_covariance[0] = gyro_cov_;
-  imu_msg.angular_velocity_covariance[4] = gyro_cov_;
-  imu_msg.angular_velocity_covariance[8] = gyro_cov_;
+  if (imu_msg->angular_velocity.z > -0.01 && imu_msg->angular_velocity.z < 0.01)
+    imu_msg->angular_velocity.z = 0;
 
-  //imu_msg.linear_acceleration = a.acceleration();
-  imu_msg.linear_acceleration.x = a.acceleration.x;
-  imu_msg.linear_acceleration.y = a.acceleration.y;
-  imu_msg.linear_acceleration.z = a.acceleration.z;
+  imu_msg->angular_velocity_covariance[0] = gyro_cov_;
+  imu_msg->angular_velocity_covariance[4] = gyro_cov_;
+  imu_msg->angular_velocity_covariance[8] = gyro_cov_;
 
-  imu_msg.linear_acceleration_covariance[0] = accel_cov_;
-  imu_msg.linear_acceleration_covariance[4] = accel_cov_;
-  imu_msg.linear_acceleration_covariance[8] = accel_cov_;
+  //imu_msg->linear_acceleration = a.acceleration();
+  imu_msg->linear_acceleration.x = a.acceleration.x;
+  imu_msg->linear_acceleration.y = a.acceleration.y;
+  imu_msg->linear_acceleration.z = a.acceleration.z;
+
+  imu_msg->linear_acceleration_covariance[0] = accel_cov_;
+  imu_msg->linear_acceleration_covariance[4] = accel_cov_;
+  imu_msg->linear_acceleration_covariance[8] = accel_cov_;
+
 }
-
 void odomDat(float vel_dt, float linear_vel_x, float linear_vel_y, float angular_vel_z) {
-
 
   float x_pos_ = (0.0);
   float y_pos_ = (0.0);
   float heading_ = (0.0);
+
 
   float delta_heading = angular_vel_z * vel_dt;  //radians
   float cos_h = cos(heading_);
@@ -414,9 +407,12 @@ void odomDat(float vel_dt, float linear_vel_x, float linear_vel_y, float angular
   x_pos_ += delta_x;
   y_pos_ += delta_y;
   heading_ += delta_heading;
-
-  float q[4];
+    float q[4];
   euler_to_quat(0, 0, heading_, q);
+
+
+  odom_msg.header.frame_id.data = "odom";
+  odom_msg.child_frame_id.data = "base_footprint";
 
   odom_msg.pose.pose.position.x = x_pos_;
   odom_msg.pose.pose.position.y = y_pos_;
@@ -445,19 +441,11 @@ void odomDat(float vel_dt, float linear_vel_x, float linear_vel_y, float angular
   odom_msg.twist.covariance[7] = 0.0001;
   odom_msg.twist.covariance[35] = 0.0001;
 }
-
 void syncTime() {
   unsigned long now = millis();
   RCCHECK(rmw_uros_sync_session(10));
   unsigned long long ros_time_ms = rmw_uros_epoch_millis();
   time_offset = ros_time_ms - now;
-}
-struct timespec getTime() {
-  struct timespec tp = { 0 };
-  unsigned long long now = millis() + time_offset;
-  tp.tv_sec = now / 1000;
-  tp.tv_nsec = (now % 1000) * 1000000;
-  return tp;
 }
 void encodeA1() {
   if (digitalRead(encoder.enc1A) == digitalRead(encoder.enc1B)) {
@@ -479,7 +467,6 @@ void encodeB2() {
     encoder.count2--;
   }
 }
-
 void encoderrpm(long pulsosx, long pulsosy) {
   // long pulsos;
   unsigned long current_time = micros();
@@ -498,5 +485,5 @@ void encoderrpm(long pulsosx, long pulsosy) {
 void rclErrorLoop() {
   while (true) {
     //
-  }
+  } 
 }
