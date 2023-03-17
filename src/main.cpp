@@ -19,12 +19,13 @@
 #include <Wire.h>
 
 #include <ESP32Servo.h>
+#define LED_PIN 2
 #define PWM_MIN 1400
 #define PWM_MAX 1600
 #define WHEEL_DIAM 0.12
 #define PPR 1075
 
-#define RCCHECK(fn) \ 
+#define RCCHECK(fn) \
   { \
     rcl_ret_t temp_rc = fn; \
     if ((temp_rc != RCL_RET_OK)) { rclErrorLoop(); } \
@@ -55,7 +56,7 @@ rclc_executor_t executor_sub;
 rcl_publisher_t Imu_Publisher;
 rcl_publisher_t odom_Publisher;
 sensor_msgs__msg__Imu *imu_msg;
-nav_msgs__msg__Odometry odom_msg;
+nav_msgs__msg__Odometry *odom_msg;
 geometry_msgs__msg__Vector3 gyro_cal_;
 rclc_executor_t executor_pub;
 
@@ -108,10 +109,10 @@ int ppr = 1075;
 float velx;
 float vely;
 
-float rpmx;
-float rpmy;
-float Linear_x;
-float Angular_z;
+float rpmx = 0;
+float rpmy = 0;
+float Linear_x = 0;
+float Angular_z = 0; 
 
 uint32_t timer2;
 unsigned long prev_odom_update = 0;
@@ -202,8 +203,8 @@ bool create_entities() {
   RCCHECK(rclc_executor_init(&executor_pub, &support.context, 1, &allocator));
   RCCHECK(rclc_executor_add_timer(&executor_pub, &timer));
 
-  // odom_msg = nav_msgs__msg__Odometry__create();
-  imu_msg = sensor_msgs__msg__Imu__create();
+  odom_msg = nav_msgs__msg__Odometry__create();
+   imu_msg = sensor_msgs__msg__Imu__create();
   return true;
 }
 
@@ -291,12 +292,11 @@ void loop() {
 void publishdata() {
   struct timespec time_stamp = getTime();
 
-
   imu_msg->header.stamp.sec = time_stamp.tv_sec;
   imu_msg->header.stamp.nanosec = time_stamp.tv_nsec;
 
-  odom_msg.header.stamp.sec = time_stamp.tv_sec;
-  odom_msg.header.stamp.nanosec = time_stamp.tv_nsec;
+  odom_msg->header.stamp.sec = time_stamp.tv_sec;
+  odom_msg->header.stamp.nanosec = time_stamp.tv_nsec;
 
     unsigned long now = millis();
   float vel_dt = (now - prev_odom_update) / 1000.0;
@@ -308,7 +308,7 @@ void publishdata() {
   odomDat(vel_dt, Linear_x, 0, Angular_z);
   Imudat();
   rcl_publish(&Imu_Publisher, imu_msg, NULL);
-  rcl_publish(&odom_Publisher, &odom_msg, NULL);
+  rcl_publish(&odom_Publisher, odom_msg, NULL);
 }
 
 void Move() {
@@ -388,7 +388,6 @@ void Imudat() {
   imu_msg->linear_acceleration_covariance[0] = accel_cov_;
   imu_msg->linear_acceleration_covariance[4] = accel_cov_;
   imu_msg->linear_acceleration_covariance[8] = accel_cov_;
-
 }
 void odomDat(float vel_dt, float linear_vel_x, float linear_vel_y, float angular_vel_z) {
 
@@ -411,35 +410,35 @@ void odomDat(float vel_dt, float linear_vel_x, float linear_vel_y, float angular
   euler_to_quat(0, 0, heading_, q);
 
 
-  odom_msg.header.frame_id.data = "odom";
-  odom_msg.child_frame_id.data = "base_footprint";
+  odom_msg->header.frame_id.data = "odom";
+  odom_msg->child_frame_id.data = "base_footprint";
 
-  odom_msg.pose.pose.position.x = x_pos_;
-  odom_msg.pose.pose.position.y = y_pos_;
-  odom_msg.pose.pose.position.z = 0.0;
+  odom_msg->pose.pose.position.x = x_pos_;
+  odom_msg->pose.pose.position.y = y_pos_;
+  odom_msg->pose.pose.position.z = 0.0;
 
-  odom_msg.pose.pose.orientation.x = (double)q[1];
-  odom_msg.pose.pose.orientation.y = (double)q[2];
-  odom_msg.pose.pose.orientation.z = (double)q[3];
-  odom_msg.pose.pose.orientation.w = (double)q[0];
+  odom_msg->pose.pose.orientation.x = (double)q[1];
+  odom_msg->pose.pose.orientation.y = (double)q[2];
+  odom_msg->pose.pose.orientation.z = (double)q[3];
+  odom_msg->pose.pose.orientation.w = (double)q[0];
 
-  odom_msg.pose.covariance[0] = 0.0001;  // covarianza
-  odom_msg.pose.covariance[7] = 0.0001;
-  odom_msg.pose.covariance[35] = 0.0001;
+  odom_msg->pose.covariance[0] = 0.0001;  // covarianza
+  odom_msg->pose.covariance[7] = 0.0001;
+  odom_msg->pose.covariance[35] = 0.0001;
 
   //linear speed encoder
-  odom_msg.twist.twist.linear.x = linear_vel_x;
-  odom_msg.twist.twist.linear.y = linear_vel_y;
-  odom_msg.twist.twist.linear.z = 0.0;
+  odom_msg->twist.twist.linear.x = linear_vel_x;
+  odom_msg->twist.twist.linear.y = linear_vel_y;
+  odom_msg->twist.twist.linear.z = 0.0;
 
   //angular speed encoder
-  odom_msg.twist.twist.angular.x = 0;
-  odom_msg.twist.twist.angular.y = 0;
-  odom_msg.twist.twist.angular.z = angular_vel_z;  //angular speed
+  odom_msg->twist.twist.angular.x = 0;
+  odom_msg->twist.twist.angular.y = 0;
+  odom_msg->twist.twist.angular.z = angular_vel_z;  //angular speed
 
-  odom_msg.twist.covariance[0] = 0.0001;
-  odom_msg.twist.covariance[7] = 0.0001;
-  odom_msg.twist.covariance[35] = 0.0001;
+  odom_msg->twist.covariance[0] = 0.0001;
+  odom_msg->twist.covariance[7] = 0.0001;
+  odom_msg->twist.covariance[35] = 0.0001;
 }
 void syncTime() {
   unsigned long now = millis();
@@ -485,5 +484,5 @@ void encoderrpm(long pulsosx, long pulsosy) {
 void rclErrorLoop() {
   while (true) {
     //
-  } 
+  }
 }
